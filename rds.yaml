@@ -20,18 +20,6 @@ Parameters:
     Type: String
     Description: Aurora PostgreSQL engine version
 
-  DBSubnet1Id:
-    Type: AWS::EC2::Subnet::Id
-    Description: ID of DB subnet 1a
-
-  DBSubnet2Id:
-    Type: AWS::EC2::Subnet::Id
-    Description: ID of DB subnet 1b
-
-  DBSecurityGroupId:
-    Type: AWS::EC2::SecurityGroup::Id
-    Description: Security group ID for the DB cluster
-
   DBMinACU:
     Type: Number
     Description: Minimum Aurora Capacity Units for Serverless v2 scaling
@@ -42,13 +30,32 @@ Parameters:
 
 Resources:
 
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'Security group for ${EnvName}-${AppName} Aurora cluster'
+      VpcId: '{{resolve:ssm:/net/vpc/id}}'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref DBPort
+          ToPort: !Ref DBPort
+          CidrIp: '{{resolve:ssm:/net/vpc/cidr}}'
+          Description: Allow DB access from VPC
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvName}-${AppName}-db-sg'
+
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
       DBSubnetGroupDescription: Subnet group for Aurora PostgreSQL Serverless v2 cluster
       SubnetIds:
-        - !Ref DBSubnet1Id
-        - !Ref DBSubnet2Id
+        - '{{resolve:ssm:/net/subnets/dbsubnet1/id}}'
+        - '{{resolve:ssm:/net/subnets/dbsubnet2/id}}'
       Tags:
         - Key: Name
           Value: "postgresql-subnets"
@@ -63,7 +70,7 @@ Resources:
       DBClusterIdentifier: !Sub '${EnvName}-${AppName}-cluster'
       DBSubnetGroupName: !Ref DBSubnetGroup
       VpcSecurityGroupIds:
-        - !Ref DBSecurityGroupId
+        - !Ref DBSecurityGroup
       Port: !Ref DBPort
 
       StorageEncrypted: true
@@ -133,3 +140,9 @@ Outputs:
     Value: !GetAtt DBCluster.MasterUserSecret.SecretArn
     Export:
       Name: !Sub '${AWS::StackName}-MasterUserSecretArn'
+
+  DBSecurityGroupId:
+    Description: Security group ID for the Aurora cluster
+    Value: !Ref DBSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-DBSecurityGroupId'
