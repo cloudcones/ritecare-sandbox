@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CloudFormation template to create an Amazon Aurora PostgreSQL Serverless v2 cluster
+  with automatic scaling capabilities. 
+
+Parameters:
+  EnvName:
+    Type: String
+    Description: Environment name (e.g. dev, staging, prod)
+
+  AppName:
+    Type: String
+    Description: Application name used for naming the cluster and instance
+
+  DBPort:
+    Type: Number
+    Description: Database port
+
+  PostgresEngineVersion:
+    Type: String
+    Description: Aurora PostgreSQL engine version
+
+  DBSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of DB subnet 1a
+
+  DBSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of DB subnet 1b
+
+  DBSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group ID for the DB cluster
+
+  DBMinACU:
+    Type: Number
+    Description: Minimum Aurora Capacity Units for Serverless v2 scaling
+
+  DBMaxACU:
+    Type: Number
+    Description: Maximum Aurora Capacity Units for Serverless v2 scaling
+
+Resources:
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for Aurora PostgreSQL Serverless v2 cluster
+      SubnetIds:
+        - !Ref DBSubnet1Id
+        - !Ref DBSubnet2Id
+      Tags:
+        - Key: Name
+          Value: "postgresql-subnets"
+
+  DBCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-postgresql
+      EngineVersion: !Ref PostgresEngineVersion
+      EngineMode: provisioned
+      DatabaseName: !Sub '${AppName}DB'
+      DBClusterIdentifier: !Sub '${EnvName}-${AppName}-cluster'
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref DBSecurityGroupId
+      Port: !Ref DBPort
+
+      StorageEncrypted: true
+
+      # AuthN: no static password + IAM auth enabled
+      ManageMasterUserPassword: true            # Auto-generates and stores master password in Secrets Manager
+      MasterUsername: 'postgres'
+      EnableIAMDatabaseAuthentication: true     # Allow token-based IAM auth
+
+      # Logs
+      EnableCloudwatchLogsExports:
+        - postgresql
+
+      # Deletion protection
+      DeletionProtection: false
+
+      # Serverless v2 scaling
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: !Ref DBMinACU
+        MaxCapacity: !Ref DBMaxACU
+
+  # At least one instance is required for an Aurora v2 cluster.
+  # Use the special 'db.serverless' class for Serverless v2.
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref DBCluster
+      DBInstanceIdentifier: !Sub '${EnvName}-${AppName}-instance'
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      PubliclyAccessible: false
+      AutoMinorVersionUpgrade: true
+      MonitoringInterval: 0  # set >0 with a role for Enhanced Monitoring
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvName}-${AppName}'
+        - Key: aws-control-tower-backupdaily
+          Value: "true"
+
+Outputs:
+  ClusterArn:
+    Description: ARN of the Aurora PostgreSQL Serverless v2 cluster
+    Value: !Ref DBCluster
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterArn'
+
+  WriterEndpoint:
+    Description: Writer endpoint hostname
+    Value: !GetAtt DBCluster.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-WriterEndpoint'
+
+  ReaderEndpoint:
+    Description: Reader endpoint hostname
+    Value: !GetAtt DBCluster.ReadEndpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-ReaderEndpoint'
+
+  Port:
+    Description: PostgreSQL port
+    Value: !Ref DBPort
+    Export:
+      Name: !Sub '${AWS::StackName}-Port'
+
+  MasterUserSecretArn:
+    Description: Secrets Manager ARN for the auto-generated master password
+    Value: !GetAtt DBCluster.MasterUserSecret.SecretArn
+    Export:
+      Name: !Sub '${AWS::StackName}-MasterUserSecretArn'
